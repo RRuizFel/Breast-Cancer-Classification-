@@ -1,0 +1,230 @@
+---
+title: "Breast Cancer Classification"
+author: "Roberto Ruiz Felix"
+date: "2024-02-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Issue
+Given a data set of breast cancer imaging descriptions, are the tumors benign or malignant? 
+
+## Import Libararies
+
+```{r}
+suppressPackageStartupMessages({
+library(ggplot2)
+library(dplyr)
+library(plotly)
+library(ggcorrplot)
+library(caret)
+library(tidyverse)
+})
+```
+
+## Load Data
+Mean, Standard Error, and 'worst' (largest) were computed for each image, resulting in 30 features. 
+```{r}
+data = read.csv("/Users/robertoruizfelix/Downloads/R Code/Breast Cancer Analysis/breast-cancer-wisconsin-data.csv")
+head(data)
+```
+
+```{r}
+str(data)
+```
+
+## Visualize all variables
+
+```{r}
+missing.val = colSums(is.na(data))
+missing.val
+```
+
+```{r}
+data.1 = data %>% as.data.frame() %>% 
+  select_if(is.numeric) %>% gather(key = 'variable', value = 'value')
+
+ggplot(data.1, aes(value)) + geom_density() + facet_wrap(~variable)
+```
+
+```{r}
+ggplot(data, aes(x = diagnosis, fill = diagnosis)) +
+  geom_bar() +
+  labs(x = "Diagnosis", y = "Frequency", title = "Barplot of Diagnosis Column") + 
+  scale_fill_manual(values = c("blue", "red"))
+```
+### Convert Diagnosis from 'B' & 'M' to 0 & 1
+```{r}
+data$diagnosis = ifelse(data$diagnosis == "M", 1, 0)
+```
+
+```{r}
+suppressWarnings({
+library(psych)})
+pairs.panels(data, gap = 0, bg = c('red', 'blue', 'green')[data$diagnosis], pch = 21)
+```
+
+## Correlation Matrix
+```{r}
+ggcorrplot(cor(data[, 2:32]))
+```
+
+### Correlation Matrix of Mean data
+```{r}
+mean.data = data[, 2:12]
+ggcorrplot(cor(mean.data))
+
+suppressWarnings({
+library(psych)})
+pairs.panels(mean.data, gap = 0, bg = c('red', 'blue', 'green')[mean.data$diagnosis], pch = 21)
+```
+
+
+### Correlation Matrix of Standard Error data
+```{r}
+SE.data = data[, c(2, 13:22)]
+
+ggcorrplot(cor(SE.data))
+
+suppressWarnings({
+library(psych)})
+pairs.panels(SE.data, gap = 0, bg = c('red', 'blue', 'green')[SE.data$diagnosis], pch = 21)
+```
+
+
+### Correlation Matrix of Worst data
+```{r}
+worst.data = data[, c(2, 23:32)]
+ggcorrplot(cor(worst.data))
+
+suppressWarnings({
+library(psych)})
+pairs.panels(worst.data, gap = 0, bg = c('red', 'blue', 'green')[worst.data$diagnosis], pch = 21)
+```
+
+
+## Data Standardization & Matrix
+```{r}
+normalized.data = scale(data[, 3:32])
+normalized.data.all = data.frame(data$diagnosis, normalized.data)
+ggcorrplot(cor(normalized.data.all))
+```
+```{R}
+pairs.panels(normalized.data.all, gap = 0, bg = c('red', 'blue', 'green')[normalized.data.all$data.diagnosis], pch = 21)
+```
+## PCA Analysis
+```{r}
+data.pca = prcomp(normalized.data.all, center = TRUE, scale = FALSE)
+summary(data.pca)
+pca.components = data.pca$x[, 1:3]
+head(pca.components)
+```
+
+### PCA Analysis on scaling the diagnosis column 
+```r
+data.pca = prcomp(data[, 2:32], center = TRUE, scale = TRUE)
+summary(data.pca)
+```
+
+## Scree Plot
+```{r}
+library(ggplot2)
+variance.explained = (data.pca$sdev^2) / sum(data.pca$sdev^2)
+
+scree.data = data.frame(Component = paste0("PC", 1:length(variance.explained)),
+                          VarianceExplained = variance.explained)
+
+scree.plot = ggplot(scree.data, aes(x = Component, y = VarianceExplained)) +
+  geom_bar(stat = "identity", fill = "skyblue", width = 0.5) +
+  labs(x = "Principal Component", y = "Proportion of Variance Explained",
+       title = "Scree Plot") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(scree.plot) 
+```
+
+## KNN Model 
+```{r}
+library(caret)
+
+# Convert diagnosis to factor (0/'B', 1/'M')
+normalized.data.all$data.diagnosis = factor(normalized.data.all$data.diagnosis, levels = c("0", "1"))
+
+# Step 1: Split data (80/20 split)
+set.seed(123) # For reproducibility
+train.index = createDataPartition(normalized.data.all$data.diagnosis, p = 0.8, list = FALSE)
+train.data = normalized.data.all[train.index, ]
+test.data = normalized.data.all[-train.index, ]
+
+# Step 2: Extract the top 3 principal components
+pca = prcomp(train.data[, -1], center = TRUE, scale. = FALSE)
+pca.components = pca$x[, 1:3]
+
+# Step 3: Tune the KNN model
+train.control = trainControl(method = "cv", number = 10)
+
+param.grid = expand.grid(k = seq(1, 100, by = 3))
+
+# Train KNN model with different k values 
+tuned.knn.model = train(
+  x = pca.components,
+  y = train.data$data.diagnosis,
+  method = "knn",
+  trControl = train.control,
+  tuneGrid = param.grid
+)
+tuned.knn.model
+
+# Step 4: Evaluate best model on testing set
+test.pca = predict(pca, newdata = test.data[, -1])
+test.pca.components = test.pca[, 1:3]
+predictions = predict(tuned.knn.model, newdata = test.pca.components)
+
+# View model performance
+confusionMatrix(predictions, test.data$data.diagnosis)
+```
+
+## Model Visualization
+
+```{r}
+library(plotly)
+
+combined.pca = rbind(pca.components, test.pca.components)
+dataset = factor(c(rep("Training", nrow(pca.components)), rep("Test", nrow(test.pca.components))))
+diagnosis = factor(c(train.data$data.diagnosis, test.data$data.diagnosis))
+prediction = factor(predictions)
+
+plot.data = data.frame(
+  PC1 = combined.pca[, 1],
+  PC2 = combined.pca[, 2],
+  PC3 = combined.pca[, 3],
+  Dataset = dataset,
+  Diagnosis = diagnosis,
+  Prediction = ifelse(dataset == "Training", NA, prediction)
+)
+
+fig = plot_ly(plot.data, x = ~PC1, y = ~PC2, z = ~PC3,
+                color = ~Dataset,
+                colors = c("blue", "red"),
+                symbol = ~Diagnosis,
+                symbols = c("circle", "square"),
+                opacity = 0.7) %>%
+  add_markers(
+    text = ~paste("Dataset:", Dataset, "<br>",
+                  "Diagnosis:", Diagnosis, "<br>",
+                  "Prediction:", ifelse(is.na(Prediction), "N/A", as.character(Prediction)))
+  ) %>%
+  layout(
+    scene = list(
+      xaxis = list(title = "PC1"),
+      yaxis = list(title = "PC2"),
+      zaxis = list(title = "PC3")
+    )
+  )
+fig
+```
+
+
